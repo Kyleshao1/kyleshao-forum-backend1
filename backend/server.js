@@ -1,4 +1,4 @@
-// backend/server.js
+// backend/server.js (修复后的版本)
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -8,7 +8,6 @@ const jwt = require('jsonwebtoken');
 const { createClient } = require('@supabase/supabase-js');
 const { marked } = require('marked');
 const DOMPurify = require('isomorphic-dompurify');
-const NodeRSA = require('node-rsa');
 
 // 环境变量配置
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -16,15 +15,25 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 const PORT = process.env.PORT || 5000;
 
+// 验证必要的环境变量
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  console.warn('警告: 缺少环境变量 SUPABASE_URL 或 SUPABASE_ANON_KEY');
+  console.warn('请在部署时设置正确的 Supabase 配置');
+}
+
 // 初始化 Supabase 客户端
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabase = SUPABASE_URL && SUPABASE_ANON_KEY ? 
+  createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
 // 创建 Express 应用
 const app = express();
 
 // 安全中间件
 app.use(helmet());
-app.use(cors());
+app.use(cors({
+  origin: process.env.FRONTEND_URL || '*', // 在开发时使用 *，生产环境应设置具体域名
+  credentials: true
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -55,6 +64,10 @@ const authenticateToken = (req, res, next) => {
 
 // 管理员验证中间件
 const adminAuth = async (req, res, next) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { data: user, error } = await supabase
       .from('users')
@@ -63,6 +76,7 @@ const adminAuth = async (req, res, next) => {
       .single();
 
     if (error) {
+      console.error('管理员验证错误:', error);
       return res.status(403).json({ message: '数据库查询错误' });
     }
 
@@ -74,12 +88,17 @@ const adminAuth = async (req, res, next) => {
     req.isMainAdmin = user.is_main_admin;
     next();
   } catch (err) {
+    console.error('管理员验证错误:', err);
     res.status(500).json({ message: '服务器错误' });
   }
 };
 
 // 主管理员验证中间件
 const mainAdminAuth = async (req, res, next) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { data: user, error } = await supabase
       .from('users')
@@ -88,6 +107,7 @@ const mainAdminAuth = async (req, res, next) => {
       .single();
 
     if (error) {
+      console.error('主管理员验证错误:', error);
       return res.status(403).json({ message: '数据库查询错误' });
     }
 
@@ -97,12 +117,17 @@ const mainAdminAuth = async (req, res, next) => {
 
     next();
   } catch (err) {
+    console.error('主管理员验证错误:', err);
     res.status(500).json({ message: '服务器错误' });
   }
 };
 
 // 获取用户信息
 const getUserInfo = async (userId) => {
+  if (!supabase) {
+    throw new Error('数据库连接未配置');
+  }
+  
   const { data, error } = await supabase
     .from('users')
     .select(`
@@ -118,19 +143,29 @@ const getUserInfo = async (userId) => {
     .eq('id', userId)
     .single();
 
-  if (error) throw error;
+  if (error) {
+    console.error('获取用户信息错误:', error);
+    throw error;
+  }
   return data;
 };
 
 // 更新用户活力值
 const updateVitality = async (userId, points) => {
+  if (!supabase) {
+    throw new Error('数据库连接未配置');
+  }
+  
   const { data: user, error: userError } = await supabase
     .from('users')
     .select('vitality')
     .eq('id', userId)
     .single();
 
-  if (userError) throw userError;
+  if (userError) {
+    console.error('获取用户活力值错误:', userError);
+    throw userError;
+  }
 
   let newVitality = Math.max(0, user.vitality + points);
   
@@ -139,7 +174,10 @@ const updateVitality = async (userId, points) => {
     .update({ vitality: newVitality })
     .eq('id', userId);
 
-  if (error) throw error;
+  if (error) {
+    console.error('更新用户活力值错误:', error);
+    throw error;
+  }
 };
 
 // 格式化帖子内容（Markdown + LaTeX）
@@ -165,6 +203,10 @@ const getPreview = (content, length = 100) => {
 
 // 认证相关路由
 app.post('/api/auth/register', async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { username, email, password } = req.body;
 
@@ -214,6 +256,7 @@ app.post('/api/auth/register', async (req, res) => {
       .single();
 
     if (error) {
+      console.error('用户注册错误:', error);
       return res.status(500).json({ message: error.message });
     }
 
@@ -242,6 +285,10 @@ app.post('/api/auth/register', async (req, res) => {
 });
 
 app.post('/api/auth/login', async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { username, password } = req.body;
 
@@ -292,6 +339,10 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 app.get('/api/auth/me', authenticateToken, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const user = await getUserInfo(req.user.id);
     res.json(user);
@@ -302,6 +353,10 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
 
 // 帖子相关路由
 app.get('/api/posts', async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { page = 1, limit = 10, search = '' } = req.query;
     const offset = (page - 1) * limit;
@@ -321,6 +376,7 @@ app.get('/api/posts', async (req, res) => {
     const { data, error, count } = await query.range(offset, offset + limit - 1);
 
     if (error) {
+      console.error('获取帖子列表错误:', error);
       return res.status(500).json({ message: error.message });
     }
 
@@ -342,6 +398,10 @@ app.get('/api/posts', async (req, res) => {
 });
 
 app.get('/api/posts/:id', async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { id } = req.params;
 
@@ -389,6 +449,10 @@ app.get('/api/posts/:id', async (req, res) => {
 });
 
 app.post('/api/posts', authenticateToken, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { title, content, category } = req.body;
 
@@ -423,6 +487,10 @@ app.post('/api/posts', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/posts/:id/like', authenticateToken, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { id } = req.params;
 
@@ -474,6 +542,10 @@ app.post('/api/posts/:id/like', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/posts/:id/useful', authenticateToken, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { id } = req.params;
 
@@ -526,6 +598,10 @@ app.post('/api/posts/:id/useful', authenticateToken, async (req, res) => {
 
 // 回复相关路由
 app.post('/api/posts/:id/replies', authenticateToken, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { id } = req.params;
     const { content } = req.body;
@@ -567,6 +643,10 @@ app.post('/api/posts/:id/replies', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/replies/:id/like', authenticateToken, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { id } = req.params;
 
@@ -619,6 +699,10 @@ app.post('/api/replies/:id/like', authenticateToken, async (req, res) => {
 
 // 用户相关路由
 app.get('/api/users/:id', async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { id } = req.params;
 
@@ -669,6 +753,10 @@ app.get('/api/users/:id', async (req, res) => {
 });
 
 app.get('/api/users/:id/posts', authenticateToken, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { id } = req.params;
 
@@ -697,6 +785,10 @@ app.get('/api/users/:id/posts', authenticateToken, async (req, res) => {
 });
 
 app.get('/api/users/:id/replies', authenticateToken, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { id } = req.params;
 
@@ -733,6 +825,10 @@ app.get('/api/users/:id/replies', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/users/:id/follow', authenticateToken, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { id } = req.params;
 
@@ -771,6 +867,10 @@ app.post('/api/users/:id/follow', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/users/:id/unfollow', authenticateToken, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { id } = req.params;
 
@@ -796,6 +896,10 @@ app.post('/api/users/:id/unfollow', authenticateToken, async (req, res) => {
 
 // 私信相关路由
 app.get('/api/messages/conversations', authenticateToken, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     // 获取用户的所有对话
     const { data: conversations, error } = await supabase.rpc('get_user_conversations', { user_id: req.user.id });
@@ -811,6 +915,10 @@ app.get('/api/messages/conversations', authenticateToken, async (req, res) => {
 });
 
 app.get('/api/messages/conversation/:id', authenticateToken, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { id } = req.params;
 
@@ -858,6 +966,10 @@ app.get('/api/messages/conversation/:id', authenticateToken, async (req, res) =>
 });
 
 app.post('/api/messages', authenticateToken, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { conversation_id, content } = req.body;
 
@@ -901,6 +1013,10 @@ app.post('/api/messages', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/messages/start', authenticateToken, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { recipient_username } = req.body;
 
@@ -955,6 +1071,10 @@ app.post('/api/messages/start', authenticateToken, async (req, res) => {
 
 // 工单相关路由
 app.get('/api/tickets', authenticateToken, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { data: tickets, error } = await supabase
       .from('tickets')
@@ -980,6 +1100,10 @@ app.get('/api/tickets', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/tickets', authenticateToken, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { title, content } = req.body;
 
@@ -1010,6 +1134,10 @@ app.post('/api/tickets', authenticateToken, async (req, res) => {
 
 // 管理员相关路由
 app.get('/api/admin/users', adminAuth, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { search = '' } = req.query;
 
@@ -1043,6 +1171,10 @@ app.get('/api/admin/users', adminAuth, async (req, res) => {
 });
 
 app.get('/api/admin/posts', adminAuth, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { search = '' } = req.query;
 
@@ -1076,6 +1208,10 @@ app.get('/api/admin/posts', adminAuth, async (req, res) => {
 });
 
 app.get('/api/admin/tickets', adminAuth, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { data: tickets, error } = await supabase
       .from('tickets')
@@ -1100,6 +1236,10 @@ app.get('/api/admin/tickets', adminAuth, async (req, res) => {
 });
 
 app.post('/api/admin/make-admin', mainAdminAuth, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { username } = req.body;
 
@@ -1135,6 +1275,10 @@ app.post('/api/admin/make-admin', mainAdminAuth, async (req, res) => {
 });
 
 app.post('/api/admin/users/:id/ban', mainAdminAuth, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { id } = req.params;
     const { reason } = req.body;
@@ -1175,6 +1319,10 @@ app.post('/api/admin/users/:id/ban', mainAdminAuth, async (req, res) => {
 });
 
 app.delete('/api/admin/posts/:id', adminAuth, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { id } = req.params;
 
@@ -1195,6 +1343,10 @@ app.delete('/api/admin/posts/:id', adminAuth, async (req, res) => {
 });
 
 app.delete('/api/admin/tickets/:id', adminAuth, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { id } = req.params;
 
@@ -1215,6 +1367,10 @@ app.delete('/api/admin/tickets/:id', adminAuth, async (req, res) => {
 });
 
 app.post('/api/admin/tickets/:id/:action', adminAuth, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     const { id, action } = req.params;
 
@@ -1251,6 +1407,10 @@ app.post('/api/admin/tickets/:id/:action', adminAuth, async (req, res) => {
 
 // 活力值每周减少任务（简化版，实际部署时需要使用定时任务）
 app.post('/api/admin/reduce-vitality', mainAdminAuth, async (req, res) => {
+  if (!supabase) {
+    return res.status(500).json({ message: '数据库连接未配置' });
+  }
+  
   try {
     // 获取所有非管理员用户
     const { data: users, error } = await supabase
@@ -1280,8 +1440,8 @@ app.get('/', (req, res) => {
   res.json({ message: '论坛API服务' });
 });
 
-// 404处理
-app.use((req, res) => {
+// 404处理 - 只处理API路由的404
+app.use('/api/*', (req, res) => {
   res.status(404).json({ message: '接口不存在' });
 });
 
@@ -1292,8 +1452,9 @@ app.use((error, req, res, next) => {
 });
 
 // 启动服务器
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`服务器运行在端口 ${PORT}`);
+  console.log(`Supabase URL: ${SUPABASE_URL ? SUPABASE_URL : '未配置'}`);
 });
 
-module.exports = app;
+module.exports = server;
