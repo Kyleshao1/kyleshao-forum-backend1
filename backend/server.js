@@ -1,4 +1,3 @@
-// backend/server.js (修复后的版本)
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
